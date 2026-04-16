@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:help_desk/main.dart'; // الوصول لمتغير supabase
+import 'package:help_desk/main.dart'; // الوصول لمتغير supabase المعرف عالمياً
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -11,6 +11,7 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard> {
   String searchQuery = "";
 
+  // دالة إظهار نافذة الرد وتحديث الحالة
   void _showReplyDialog(BuildContext context, int complaintId) {
     final TextEditingController replyController = TextEditingController();
 
@@ -33,30 +34,40 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ),
           ElevatedButton(
             onPressed: () async {
-              if (replyController.text.isNotEmpty) {
+              if (replyController.text.trim().isNotEmpty) {
                 try {
                   // 1. إرسال الرد لجدول الـ replies
                   await supabase.from('replies').insert({
                     'complaint_id': complaintId,
-                    'content': replyController.text,
+                    'content': replyController.text.trim(),
                   });
 
-                  // 2. تحديث الحالة لـ done (الأدمن هو المتحكم الآن)
+                  // 2. تحديث الحالة في جدول الشكاوى (complaints) لتصبح done
                   await supabase
                       .from('complaints')
                       .update({'status': 'done'})
                       .eq('id', complaintId);
 
                   if (context.mounted) {
-                    Navigator.pop(context);
+                    Navigator.pop(context); // إغلاق النافذة
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("تم إرسال الرد وتحديث الحالة بنجاح!")),
+                      const SnackBar(content: Text("تم إرسال الرد وتحديث الحالة إلى 'تم الحل' ✅")),
                     );
+                    // إعادة بناء الواجهة لتحديث الألوان والأيقونات
                     setState(() {});
                   }
                 } catch (e) {
                   debugPrint("خطأ أثناء إرسال الرد: $e");
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("حدث خطأ: $e")),
+                    );
+                  }
                 }
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("يرجى كتابة رد أولاً")),
+                );
               }
             },
             child: const Text("إرسال الرد"),
@@ -70,32 +81,46 @@ class _AdminDashboardState extends State<AdminDashboard> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("لوحة تحكم الأدمن"),
+        title: const Text("لوحة تحكم المسؤول (Admin)"),
         centerTitle: true,
         backgroundColor: Colors.blue.shade100,
       ),
       body: Column(
         children: [
+          // حقل البحث (Search Bar)
           Padding(
-            padding: const EdgeInsets.all(10.0),
+            padding: const EdgeInsets.all(12.0),
             child: TextField(
               decoration: InputDecoration(
                 hintText: "بحث عن عنوان أو وصف الشكوى...",
                 prefixIcon: const Icon(Icons.search),
                 filled: true,
                 fillColor: Colors.grey.shade100,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(15),
+                  borderSide: BorderSide.none,
+                ),
               ),
               onChanged: (value) => setState(() => searchQuery = value),
             ),
           ),
+
+          // عرض الشكاوى باستخدام StreamBuilder للتحديث اللحظي
           Expanded(
             child: StreamBuilder<List<Map<String, dynamic>>>(
-              stream: supabase.from('complaints').stream(primaryKey: ['id']).order('created_at', ascending: false),
+              stream: supabase
+                  .from('complaints')
+                  .stream(primaryKey: ['id'])
+                  .order('created_at', ascending: false),
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-                if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("لا توجد شكاوى حالياً."));
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                  return const Center(child: Text("لا توجد شكاوى حالياً."));
+                }
 
+                // تصفية النتائج بناءً على البحث
                 final filteredComplaints = snapshot.data!.where((c) {
                   final title = c['title']?.toString().toLowerCase() ?? "";
                   final desc = c['description']?.toString().toLowerCase() ?? "";
@@ -107,24 +132,52 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   itemCount: filteredComplaints.length,
                   itemBuilder: (context, index) {
                     final item = filteredComplaints[index];
+                    final bool isDone = item['status'] == 'done';
+
                     return FutureBuilder<List<Map<String, dynamic>>>(
                       future: supabase.from('replies').select().eq('complaint_id', item['id']),
                       builder: (context, replySnapshot) {
                         final bool hasReply = replySnapshot.hasData && replySnapshot.data!.isNotEmpty;
+
                         return Card(
-                          margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                          color: item['status'] == 'done' ? Colors.green.shade50 : Colors.white,
+                          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          elevation: 2,
+                          color: isDone ? Colors.green.shade50 : Colors.white,
                           child: ListTile(
                             leading: Icon(
-                              item['status'] == 'done' ? Icons.check_circle : Icons.pending_actions,
-                              color: item['status'] == 'done' ? Colors.green : Colors.orange,
+                              isDone ? Icons.check_circle : Icons.pending_actions,
+                              color: isDone ? Colors.green : Colors.orange,
+                              size: 30,
                             ),
-                            title: Text(item['title'] ?? "بدون عنوان", style: const TextStyle(fontWeight: FontWeight.bold)),
-                            subtitle: Text("الحالة: ${item['status'] == 'done' ? 'تم الحل' : 'قيد الانتظار'}"),
-                            trailing: hasReply ? const Icon(Icons.done_all, color: Colors.blue) : const Icon(Icons.reply, color: Colors.grey),
+                            title: Text(
+                              item['title'] ?? "بدون عنوان",
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(item['description'] ?? ""),
+                                const SizedBox(height: 4),
+                                Text(
+                                  "الحالة: ${isDone ? 'تم الحل' : 'قيد الانتظار'}",
+                                  style: TextStyle(
+                                    color: isDone ? Colors.green.shade700 : Colors.orange.shade800,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            trailing: hasReply
+                                ? const Icon(Icons.done_all, color: Colors.blue)
+                                : const Icon(Icons.reply, color: Colors.grey),
                             onTap: () {
-                              if (!hasReply) _showReplyDialog(context, item['id']);
-                              else ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("تم الرد بالفعل.")));
+                              if (!isDone) {
+                                _showReplyDialog(context, item['id']);
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text("هذه الشكوى تم حلها بالفعل.")),
+                                );
+                              }
                             },
                           ),
                         );
